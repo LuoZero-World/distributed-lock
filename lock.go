@@ -6,9 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/LuoZero-World/distributed-lock/internal/utils"
 	"github.com/redis/go-redis/v9"
-
-	"github.com/LuoZero-World/distributed-lock/utils"
 )
 
 const REDIS_LOCK_KEY_PREFIX = "redis:lock:"
