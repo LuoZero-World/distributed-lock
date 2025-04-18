@@ -45,17 +45,21 @@ func NewRedisLock(key string, client *redis.Client, opts ...LockOption) *RedisLo
 	return &rLock
 }
 
-func (rLock *RedisLock) Lock(ctx context.Context) error {
+func (rLock *RedisLock) Lock(ctx context.Context) (err error) {
 	// 无论是否阻塞都先尝试加一次锁
-	ok, err := rLock.tryLock(ctx)
-	if ok {
+	err = rLock.tryLock(ctx)
+	if err == nil { //加锁成功
 		return nil
 	}
 	if !rLock.isBlock { //非阻塞情况直接返回
-		return err
+		return
 	}
-	// TODO 阻塞情况
-	return nil
+	// 阻塞情况
+	if !IsRetryableErr(err) {
+		return
+	}
+	err = rLock.blockingLock(ctx)
+	return
 }
 
 func (rLock *RedisLock) Unlock(ctx context.Context) (err error) {
@@ -72,13 +76,45 @@ func (rLock *RedisLock) Unlock(ctx context.Context) (err error) {
 }
 
 // 尝试加锁
-func (rLock *RedisLock) tryLock(ctx context.Context) (bool, error) {
+func (rLock *RedisLock) tryLock(ctx context.Context) error {
 	ok, err := rLock.client.SetNX(ctx, rLock.key, rLock.token, time.Duration(rLock.expireSeconds)*time.Second).Result()
 	if err != nil {
-		return false, err
+		return err
 	}
 	if !ok {
-		return false, fmt.Errorf("%w: %s", ErrLockAcquiredByOthers, rLock.key)
+		return fmt.Errorf("%w: %s", ErrLockAcquiredByOthers, rLock.key)
 	}
-	return true, nil
+	return nil
+}
+
+func (rLock *RedisLock) blockingLock(ctx context.Context) error {
+	//阻塞模式等待时间上限
+	timeoutCh := time.After(time.Duration(rLock.blockWaitingSeconds) * time.Second)
+	ticker := time.NewTicker(time.Duration(50) * time.Millisecond)
+
+	defer ticker.Stop()
+
+	for range ticker.C {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("lock failed, ctx timeout err: %w", ctx.Err())
+		case <-timeoutCh:
+			return fmt.Errorf("block waiting time out, err: %w", ErrLockAcquiredByOthers)
+		default:
+		}
+
+		//尝试取锁
+		if err := rLock.tryLock(ctx); err == nil { //取锁成功
+			return nil
+		} else if !IsRetryableErr(err) {
+			return err
+		}
+	}
+
+	//不可达
+	return nil
+}
+
+func IsRetryableErr(err error) bool {
+	return errors.Is(err, ErrLockAcquiredByOthers)
 }
