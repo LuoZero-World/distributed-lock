@@ -25,7 +25,7 @@ type RedLockOptions struct {
 }
 
 func NewRedLock(key string, clients []*redis.Client, opts ...RedLockOption) (*RedLock, error) {
-	// 3 个节点及以上，红锁才有意义
+	// 3个【独立节点】及以上，红锁才有意义
 	if len(clients) < 3 {
 		return nil, ErrTooFewNodes
 	}
